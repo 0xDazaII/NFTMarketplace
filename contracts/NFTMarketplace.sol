@@ -5,8 +5,9 @@ import "hardhat/console.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract NFTMarketplace is ERC721URIStorage {
+contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
 
     using Counters for Counters.Counter;
     //_tokenIds variable has the most recent minted tokenId
@@ -36,6 +37,11 @@ contract NFTMarketplace is ERC721URIStorage {
         bool currentlyListed
     );
 
+    //Custum Errors
+    error Unauthorized(address _address);
+    error InvalidValue(uint256 _value);
+    error InvalidRequest();
+
     //This mapping maps tokenId to token info and is helpful when retrieving details about a tokenId
     mapping(uint256 => ListedToken) private idToListedToken;
 
@@ -43,8 +49,13 @@ contract NFTMarketplace is ERC721URIStorage {
         owner = payable(msg.sender);
     }
 
-    function updateListPrice(uint256 _listPrice) public payable {
-        require(owner == msg.sender, "Only owner can update listing price");
+    function updateListPrice(uint256 _listPrice) external  payable {
+        if(owner != msg.sender)
+        revert Unauthorized(msg.sender);
+
+        if(_listPrice <=0)
+        revert InvalidValue(_listPrice);
+        
         listPrice = _listPrice;
     }
 
@@ -66,7 +77,7 @@ contract NFTMarketplace is ERC721URIStorage {
     }
 
     //The first time a token is created, it is listed here
-    function createToken(string memory tokenURI, uint256 price) public payable returns (uint) {
+    function createToken(string memory tokenURI, uint256 price) external payable nonReentrant() returns (uint) {
         //Increment the tokenId counter, which is keeping track of the number of minted NFTs
         _tokenIds.increment();
         uint256 newTokenId = _tokenIds.current();
@@ -85,9 +96,12 @@ contract NFTMarketplace is ERC721URIStorage {
 
     function createListedToken(uint256 tokenId, uint256 price) private {
         //Make sure the sender sent enough ETH to pay for listing
-        require(msg.value == listPrice, "Hopefully sending the correct price");
+        if(msg.value != listPrice)
+        revert InvalidValue(msg.value);
+    
         //Just sanity check
-        require(price > 0, "Make sure the price isn't negative");
+        if(price <= 0 )
+        revert InvalidValue(price);
 
         //Update the mapping of tokenId's to Token details, useful for retrieval functions
         idToListedToken[tokenId] = ListedToken(
@@ -111,22 +125,26 @@ contract NFTMarketplace is ERC721URIStorage {
     
     //This will return all the NFTs currently listed to be sold on the marketplace
     function getAllNFTs() public view returns (ListedToken[] memory) {
-        uint nftCount = _tokenIds.current();
+        uint256 nftCount = _tokenIds.current();
         ListedToken[] memory tokens = new ListedToken[](nftCount);
-        uint currentIndex = 0;
-        uint currentId;
-        //at the moment currentlyListed is true for all, if it becomes false in the future we will 
-        //filter out currentlyListed == false over here
-        for(uint i=0;i<nftCount;i++)
-        {
+        uint256 currentIndex = 0;
+        uint256 currentId;
+        
+        for(uint i= 0; i < nftCount; i++) {
             currentId = i + 1;
             ListedToken storage currentItem = idToListedToken[currentId];
-            tokens[currentIndex] = currentItem;
-            currentIndex += 1;
-        }
+
+            if(currentItem.currentlyListed) {
+                tokens[currentIndex] = currentItem;
+                currentIndex = currentIndex + 1;
+            }
+        } 
+        
         //the array 'tokens' has the list of all NFTs in the marketplace
         return tokens;
     }
+        
+    
     
     //Returns all the NFTs that the current user is owner or seller in
     function getMyNFTs() public view returns (ListedToken[] memory) {
@@ -155,13 +173,17 @@ contract NFTMarketplace is ERC721URIStorage {
         return items;
     }
 
-    function executeSale(uint256 tokenId) public payable {
-        uint price = idToListedToken[tokenId].price;
+    function executeSale(uint256 tokenId) external payable nonReentrant{
+        uint256 price = idToListedToken[tokenId].price;
         address seller = idToListedToken[tokenId].seller;
-        require(msg.value == price, "Please submit the asking price in order to complete the purchase");
+        if(msg.sender != idToListedToken[tokenId].seller || msg.sender != idToListedToken[tokenId].owner)
+        revert InvalidRequest();
 
+        if(msg.value != price)
+        revert InvalidValue(msg.value);
+         
         //update the details of the token
-        idToListedToken[tokenId].currentlyListed = true;
+        idToListedToken[tokenId].currentlyListed = false;
         idToListedToken[tokenId].seller = payable(msg.sender);
         _itemsSold.increment();
 
@@ -174,8 +196,21 @@ contract NFTMarketplace is ERC721URIStorage {
         payable(owner).transfer(listPrice);
         //Transfer the proceeds from the sale to the seller of the NFT
         payable(seller).transfer(msg.value);
+        
     }
 
+    /*function reSaleNFT(uint256 tokenId, uint256 price) external payable nonReentrant 
+    {
+        if(msg.sender != idToListedToken[tokenId].seller)
+        revert InvalidRequest();
+
+        //update the details of the token
+        idToListedToken[tokenId].currentlyListed = true;
+        idToListedToken[tokenId].price = price;
+        
+        //Transfer the listing fee to the marketplace creator
+        payable(owner).transfer(listPrice);
+    } */
     //We might add a resell token function in the future
     //In that case, tokens won't be listed by default but users can send a request to actually list a token
     //Currently NFTs are listed by default
