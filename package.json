@@ -1,9 +1,12 @@
 {
-  "name": "marketplace3",
-  "version": "0.1.0",
+  
+
+  "name": "nftmarketplace",
+  "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@openzeppelin/contracts": "^4.7.3",
+    "@openzeppelin/contracts": "^4.9.0",
+    "@openzeppelin/test-helpers": "^0.5.16",
     "@testing-library/jest-dom": "^5.16.4",
     "@testing-library/react": "^13.3.0",
     "@testing-library/user-event": "^13.5.0",
@@ -15,6 +18,7 @@
     "react-router": "^6.3.0",
     "react-router-dom": "^6.3.0",
     "react-scripts": "5.0.1",
+    "solidity-coverage": "^0.8.2",
     "web-vitals": "^2.1.4",
     "web3modal": "^1.9.7"
   },
@@ -53,7 +57,7 @@
     "dotenv": "^16.0.3",
     "ethereum-waffle": "^3.4.4",
     "ethers": "^5.6.8",
-    "hardhat": "^2.9.7",
+    "hardhat": "^2.14.1",
     "https-browserify": "^1.0.0",
     "os-browserify": "^0.3.0",
     "postcss": "^8.4.14",

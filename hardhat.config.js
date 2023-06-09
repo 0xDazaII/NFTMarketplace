@@ -1,6 +1,7 @@
 require("@nomiclabs/hardhat-waffle");
 require("@nomiclabs/hardhat-ethers");
 require("dotenv").config();
+require("solidity-coverage");
 const fs = require("fs");
 // const infuraId = fs.readFileSync(".infuraid").toString().trim() || "";
 
@@ -31,7 +32,7 @@ module.exports = {
     },
   },
   solidity: {
-    version: "0.8.4",
+    version: "0.8.20",
     settings: {
       optimizer: {
         enabled: true,

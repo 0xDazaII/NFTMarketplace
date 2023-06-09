@@ -1,23 +1,28 @@
 //SPDX-License-Identifier: Unlicense
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "hardhat/console.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./CrazySharo.sol";
 
-contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
-
+contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard {
     using Counters for Counters.Counter;
     //_tokenIds variable has the most recent minted tokenId
     Counters.Counter private _tokenIds;
     //Keeps track of the number of items sold on the marketplace
     Counters.Counter private _itemsSold;
     //owner is the contract address that created the smart contract
-    address payable owner;
+    address payable _owner;
+    //the address of the SHARO token
+    CrazySharo sharoToken;
     //The fee charged by the marketplace to be allowed to list an NFT
-    uint256 listPrice = 0.01 ether;
+    uint256 feePercentage = 1; //1 percent of fee
+
+    //uint256 feePercentageVol2 = 10 * 10**18 // 10 tokens depower of 10**18
 
     //The structure to store info about a listed token
     struct ListedToken {
@@ -29,7 +34,7 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
     }
 
     //the event emitted when a token is successfully listed
-    event TokenListedSuccess (
+    event TokenListedSuccess(
         uint256 indexed tokenId,
         address owner,
         address seller,
@@ -39,45 +44,79 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
 
     //Custum Errors
     error Unauthorized(address _address);
-    error InvalidValue(uint256 _value);
+    error InsufficientAmount(uint256 _value);
     error InvalidRequest();
+    error BuyerCannotBeSeller();
+    error NotSalable();
 
     //This mapping maps tokenId to token info and is helpful when retrieving details about a tokenId
     mapping(uint256 => ListedToken) private idToListedToken;
 
-    constructor() ERC721("NFTMarketplace", "NFTM") {
-        owner = payable(msg.sender);
+    //Constructor
+    constructor(address _sharoAddress) ERC721("NFTMarketplace", "NFTM") {
+        sharoToken = CrazySharo(_sharoAddress);
+        _owner = payable(msg.sender);
     }
 
-    function updateListPrice(uint256 _listPrice) external  payable {
-        if(owner != msg.sender)
-        revert Unauthorized(msg.sender);
+    /* ************FUNCTIONS********************************************
+     ********************************************************************
+     ********************************************************************
+     */
+    // it updates the fee percentage OnlyOnwer
+    function updateFeePercentage(uint256 _feePercentage) external payable {
+        if (_owner != msg.sender) revert Unauthorized(msg.sender);
 
-        if(_listPrice <=0)
-        revert InvalidValue(_listPrice);
-        
-        listPrice = _listPrice;
+        if (_feePercentage <= 0 || _feePercentage > 10)
+            revert InsufficientAmount(_feePercentage);
+
+        feePercentage = _feePercentage;
     }
 
-    function getListPrice() public view returns (uint256) {
+    //Gets the current feePercentage
+    function getfeePercentage() public view returns (uint256) {
+        return feePercentage;
+    }
+
+    //Gets listedPrice of the tokenId
+    function getListPrice(uint256 tokenId) public view returns (uint256) {
+        uint256 price = (idToListedToken[tokenId].price);
+        uint256 listPrice = (price * feePercentage) / 100;
         return listPrice;
     }
 
-    function getLatestIdToListedToken() public view returns (ListedToken memory) {
+    //Gets the latest minted TokenId
+    function getLatestIdToListedToken()
+        public
+        view
+        returns (ListedToken memory)
+    {
         uint256 currentTokenId = _tokenIds.current();
         return idToListedToken[currentTokenId];
     }
 
-    function getListedTokenForId(uint256 tokenId) public view returns (ListedToken memory) {
+    //Gets the address of the tokenId
+    function getListedTokenForId(
+        uint256 tokenId
+    ) public view returns (ListedToken memory) {
         return idToListedToken[tokenId];
     }
 
+    //Gets the current tokens
     function getCurrentToken() public view returns (uint256) {
         return _tokenIds.current();
     }
 
+    function payTaxToOwner(uint256 tokenId) public payable {
+        sharoToken.transfer(_owner, getListPrice(tokenId));
+        sharoToken.allowance(address(this), msg.sender);
+    }
+
     //The first time a token is created, it is listed here
-    function createToken(string memory tokenURI, uint256 price) external payable nonReentrant() returns (uint) {
+    function createToken(
+        string memory tokenURI,
+        uint256 price
+    ) external payable nonReentrant returns (uint) {
+        //tokenAddress.transferFrom(msg.sender, address(this), price);
         //Increment the tokenId counter, which is keeping track of the number of minted NFTs
         _tokenIds.increment();
         uint256 newTokenId = _tokenIds.current();
@@ -89,19 +128,15 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
         _setTokenURI(newTokenId, tokenURI);
 
         //Helper function to update Global variables and emit an event
-        createListedToken(newTokenId, price);
+        _createListedToken(newTokenId, price);
 
         return newTokenId;
     }
 
-    function createListedToken(uint256 tokenId, uint256 price) private {
-        //Make sure the sender sent enough ETH to pay for listing
-        if(msg.value != listPrice)
-        revert InvalidValue(msg.value);
-    
+    //Creates token and maps it to itToListedToken
+    function _createListedToken(uint256 tokenId, uint256 price) private {
         //Just sanity check
-        if(price <= 0 )
-        revert InvalidValue(price);
+        if (price <= 0) revert InsufficientAmount(price);
 
         //Update the mapping of tokenId's to Token details, useful for retrieval functions
         idToListedToken[tokenId] = ListedToken(
@@ -111,6 +146,10 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
             price,
             true
         );
+
+        //Paying the fee to the contract owner
+        sharoToken.transferFrom(msg.sender, _owner, getListPrice(tokenId));
+        //payable(_owner).transfer(getListPrice(tokenId));
 
         _transfer(msg.sender, address(this), tokenId);
         //Emit the event for successful transfer. The frontend parses this message and updates the end user
@@ -122,30 +161,28 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
             true
         );
     }
-    
+
     //This will return all the NFTs currently listed to be sold on the marketplace
     function getAllNFTs() public view returns (ListedToken[] memory) {
         uint256 nftCount = _tokenIds.current();
         ListedToken[] memory tokens = new ListedToken[](nftCount);
         uint256 currentIndex = 0;
         uint256 currentId;
-        
-        for(uint i= 0; i < nftCount; i++) {
+
+        for (uint256 i = 0; i < nftCount; i++) {
             currentId = i + 1;
             ListedToken storage currentItem = idToListedToken[currentId];
 
-            if(currentItem.currentlyListed) {
+            if (currentItem.currentlyListed) {
                 tokens[currentIndex] = currentItem;
                 currentIndex = currentIndex + 1;
             }
-        } 
-        
+        }
+
         //the array 'tokens' has the list of all NFTs in the marketplace
         return tokens;
     }
-        
-    
-    
+
     //Returns all the NFTs that the current user is owner or seller in
     function getMyNFTs() public view returns (ListedToken[] memory) {
         uint totalItemCount = _tokenIds.current();
@@ -153,18 +190,23 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
         uint currentIndex = 0;
         uint currentId;
         //Important to get a count of all the NFTs that belong to the user before we can make an array for them
-        for(uint i=0; i < totalItemCount; i++)
-        {
-            if(idToListedToken[i+1].owner == msg.sender || idToListedToken[i+1].seller == msg.sender){
+        for (uint i = 0; i < totalItemCount; i++) {
+            if (
+                idToListedToken[i + 1].owner == msg.sender ||
+                idToListedToken[i + 1].seller == msg.sender
+            ) {
                 itemCount += 1;
             }
         }
 
         //Once you have the count of relevant NFTs, create an array then store all the NFTs in it
         ListedToken[] memory items = new ListedToken[](itemCount);
-        for(uint i=0; i < totalItemCount; i++) {
-            if(idToListedToken[i+1].owner == msg.sender || idToListedToken[i+1].seller == msg.sender) {
-                currentId = i+1;
+        for (uint i = 0; i < totalItemCount; i++) {
+            if (
+                idToListedToken[i + 1].owner == msg.sender ||
+                idToListedToken[i + 1].seller == msg.sender
+            ) {
+                currentId = i + 1;
                 ListedToken storage currentItem = idToListedToken[currentId];
                 items[currentIndex] = currentItem;
                 currentIndex += 1;
@@ -173,15 +215,23 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
         return items;
     }
 
-    function executeSale(uint256 tokenId) external payable nonReentrant{
-        uint256 price = idToListedToken[tokenId].price;
+    //The Buy Function for currently listed NFTs for sale on the marketplace
+    function executeSale(
+        uint256 tokenId,
+        uint256 price
+    ) external payable nonReentrant {
         address seller = idToListedToken[tokenId].seller;
-        if(msg.sender != idToListedToken[tokenId].seller || msg.sender != idToListedToken[tokenId].owner)
-        revert InvalidRequest();
+        uint256 sellPrice = idToListedToken[tokenId].price;
 
-        if(msg.value != price)
-        revert InvalidValue(msg.value);
-         
+        if (
+            msg.sender == idToListedToken[tokenId].seller ||
+            msg.sender == idToListedToken[tokenId].owner
+        ) revert BuyerCannotBeSeller();
+
+        if (!idToListedToken[tokenId].currentlyListed) revert NotSalable();
+
+        if (price != sellPrice) revert InsufficientAmount(price);
+
         //update the details of the token
         idToListedToken[tokenId].currentlyListed = false;
         idToListedToken[tokenId].seller = payable(msg.sender);
@@ -193,25 +243,42 @@ contract NFTMarketplace is ERC721URIStorage, ReentrancyGuard  {
         approve(address(this), tokenId);
 
         //Transfer the listing fee to the marketplace creator
-        payable(owner).transfer(listPrice);
+        payTaxToOwner(tokenId);
+        //(_owner).transfer(getListPrice(tokenId));
+
         //Transfer the proceeds from the sale to the seller of the NFT
-        payable(seller).transfer(msg.value);
-        
+        //uint256 proceeds = sellPrice; //- getListPrice(tokenId);
+
+        //sharoToken.transferFrom(msg.sender, seller, proceeds);
+        //sharoToken.increaseAllowance(msg.sender, 1000000);
+        //sharoToken.allowance(address(this), msg.sender);
     }
 
-    /*function reSaleNFT(uint256 tokenId, uint256 price) external payable nonReentrant 
-    {
-        if(msg.sender != idToListedToken[tokenId].seller)
-        revert InvalidRequest();
+    //Function for selling your NFT again on the marketplace
+    function reSaleNFT(
+        uint256 tokenId,
+        uint256 price
+    ) external payable nonReentrant {
+        if (msg.sender != idToListedToken[tokenId].seller)
+            revert InvalidRequest();
 
         //update the details of the token
         idToListedToken[tokenId].currentlyListed = true;
         idToListedToken[tokenId].price = price;
-        
+
         //Transfer the listing fee to the marketplace creator
-        payable(owner).transfer(listPrice);
-    } */
-    //We might add a resell token function in the future
-    //In that case, tokens won't be listed by default but users can send a request to actually list a token
+        payTaxToOwner(tokenId);
+        //payable(_owner).transfer(getListPrice(tokenId));
+    }
+
+    //Function for removing your NFT for sale of the marketplace
+    function cancelSale(uint256 tokenId) external {
+        if (msg.sender != idToListedToken[tokenId].seller)
+            revert InvalidRequest();
+
+        //update the details of the token
+        idToListedToken[tokenId].currentlyListed = false;
+    }
+
     //Currently NFTs are listed by default
 }
